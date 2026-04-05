@@ -28,6 +28,16 @@ struct BannerView: View {
         }
         .ignoresSafeArea()
         .statusBarHidden()
+        .gesture(
+            DragGesture(minimumDistance: 80)
+                .onEnded { value in
+                    let vertical = abs(value.translation.height)
+                    let horizontal = abs(value.translation.width)
+                    if vertical > horizontal && value.translation.height < -80 {
+                        dismiss()
+                    }
+                }
+        )
         .onTapGesture(count: 2) { dismiss() }
         .onAppear {
             UIApplication.shared.isIdleTimerDisabled = true
