@@ -154,6 +154,7 @@ final class LEDSnapEngine {
         return result == 0
     }
 
+    @discardableResult
     func loadLsnap(from url: URL) -> Bool {
         var snap = LSSnapFile()
         guard ls_snap_read(url.path, &snap) == 0 else { return false }
@@ -166,12 +167,19 @@ final class LEDSnapEngine {
             for d in 0..<Int(fr.dirty_count) {
                 let dp = fr.dirty_pixels[d]
                 let pidx = Int(dp.palette_idx)
-                guard pidx < snap.palette_size else { continue }
+                guard pidx < Int(snap.palette_size) else { continue }
                 guard ls_grid_in_bounds(&compositor.midground, Int32(dp.x), Int32(dp.y)) != 0 else { continue }
+
+                let rgb = withUnsafeBytes(of: &snap.palette) { rawBuf -> (UInt8, UInt8, UInt8) in
+                    let base = rawBuf.baseAddress!.assumingMemoryBound(to: UInt8.self)
+                    let offset = pidx * 3
+                    return (base[offset], base[offset + 1], base[offset + 2])
+                }
+
                 var color = LSPixel()
-                color.r = snap.palette[pidx].0
-                color.g = snap.palette[pidx].1
-                color.b = snap.palette[pidx].2
+                color.r = rgb.0
+                color.g = rgb.1
+                color.b = rgb.2
                 color.a = 255
                 ls_grid_at(&compositor.midground, dp.x, dp.y).pointee = color
             }
