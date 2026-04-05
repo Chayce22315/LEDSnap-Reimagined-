@@ -1,0 +1,170 @@
+name: LEDSnap CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+
+  # ═══════════════════════════════════════════════════════════════
+  #  Core C library — build + run tests (Ubuntu, fast)
+  # ═══════════════════════════════════════════════════════════════
+  core-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -B build
+        working-directory: core
+
+      - name: Build
+        run: cmake --build build
+        working-directory: core
+
+      - name: Test
+        run: ./build/test_compositor
+        working-directory: core
+
+  # ═══════════════════════════════════════════════════════════════
+  #  iOS — build .app (simulator) and .ipa (device, unsigned)
+  # ═══════════════════════════════════════════════════════════════
+  ios-build:
+    runs-on: macos-15
+    needs: core-tests
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          XCODE_PATH=$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -1)
+          echo "Using $XCODE_PATH"
+          sudo xcode-select -s "$XCODE_PATH/Contents/Developer"
+          xcodebuild -version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+        working-directory: ios
+
+      # ── Simulator .app ──
+      - name: Build for Simulator
+        run: |
+          xcodebuild build \
+            -project LEDSnap.xcodeproj \
+            -scheme LEDSnap \
+            -sdk iphonesimulator \
+            -configuration Release \
+            -derivedDataPath build/derived \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            ONLY_ACTIVE_ARCH=NO
+        working-directory: ios
+
+      - name: Package Simulator .app
+        run: |
+          APP_PATH=$(find ios/build/derived -name "LEDSnap.app" -type d | head -1)
+          echo "Found .app at: $APP_PATH"
+          mkdir -p artifacts/simulator
+          cp -R "$APP_PATH" artifacts/simulator/
+          cd artifacts/simulator
+          zip -r ../LEDSnap-Simulator.zip LEDSnap.app
+
+      - name: Upload Simulator .app
+        uses: actions/upload-artifact@v4
+        with:
+          name: LEDSnap-Simulator.app
+          path: artifacts/LEDSnap-Simulator.zip
+
+      # ── Device .ipa (unsigned) ──
+      - name: Archive for Device
+        run: |
+          xcodebuild archive \
+            -project LEDSnap.xcodeproj \
+            -scheme LEDSnap \
+            -sdk iphoneos \
+            -configuration Release \
+            -archivePath build/LEDSnap.xcarchive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            ONLY_ACTIVE_ARCH=NO
+        working-directory: ios
+
+      - name: Package .ipa
+        run: |
+          ARCHIVE="ios/build/LEDSnap.xcarchive"
+          mkdir -p artifacts/ipa/Payload
+          cp -R "$ARCHIVE/Products/Applications/LEDSnap.app" artifacts/ipa/Payload/
+          cd artifacts/ipa
+          zip -r ../LEDSnap-unsigned.ipa Payload
+
+      - name: Upload .ipa
+        uses: actions/upload-artifact@v4
+        with:
+          name: LEDSnap-unsigned.ipa
+          path: artifacts/LEDSnap-unsigned.ipa
+
+  # ═══════════════════════════════════════════════════════════════
+  #  Windows — build .exe (PC receiver)
+  # ═══════════════════════════════════════════════════════════════
+  windows-build:
+    runs-on: windows-latest
+    needs: core-tests
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup vcpkg and install SDL2
+        run: |
+          vcpkg install sdl2:x64-windows
+
+      - name: Configure
+        run: |
+          cmake -B build `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows `
+            -A x64
+        working-directory: pc
+
+      - name: Build
+        run: cmake --build build --config Release
+        working-directory: pc
+
+      - name: Package .exe
+        run: |
+          mkdir artifacts
+          Copy-Item "pc\build\Release\LEDSnap_Receiver.exe" "artifacts\"
+          # Copy SDL2.dll alongside the exe
+          $sdlDll = Get-ChildItem -Recurse "pc\build" -Filter "SDL2.dll" | Select-Object -First 1
+          if ($sdlDll) { Copy-Item $sdlDll.FullName "artifacts\" }
+
+      - name: Upload .exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: LEDSnap_Receiver-Windows
+          path: artifacts/
+
+  # ═══════════════════════════════════════════════════════════════
+  #  Linux — build PC receiver (build check)
+  # ═══════════════════════════════════════════════════════════════
+  linux-build:
+    runs-on: ubuntu-latest
+    needs: core-tests
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install SDL2
+        run: sudo apt-get update && sudo apt-get install -y libsdl2-dev
+
+      - name: Configure
+        run: cmake -B build
+        working-directory: pc
+
+      - name: Build
+        run: cmake --build build
+        working-directory: pc
